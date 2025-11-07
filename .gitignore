@@ -1,0 +1,18 @@
+# Binários compilados
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+api-server
+worker-service
+
+# Arquivo de ambiente
+.env
+
+# Logs
+*.log
+
+# Arquivos de sistema operacional
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+# Stage 1: Build
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copia todo o código-fonte (assumindo que está na raiz ou pastas)
+COPY ./ ./
+
+# Compila o binário da API
+# Substitua './cmd/api' pelo caminho real do seu 'main.go' da API
+RUN CGO_ENABLED=0 GOOS=linux go build -v -o /api-server ./cmd/api
+
+# Stage 2: Final Image
+FROM alpine:latest
+WORKDIR /
+# Copia certificados de CA (necessário para HTTPS para o Google)
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copia apenas o binário compilado
+COPY --from=builder /api-server /api-server
+
+EXPOSE 8080
+CMD ["/api-server"]

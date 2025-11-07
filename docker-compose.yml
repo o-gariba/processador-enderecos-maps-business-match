@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # 1. A API que recebe o upload
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080" # Expõe a API na porta 8080 da sua máquina
+    environment:
+      # Conexões
+      - DB_DSN=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@queue:5672/
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_USER=${MINIO_ROOT_USER}
+      - MINIO_PASS=${MINIO_ROOT_PASSWORD}
+      - MINIO_USE_SSL=false
+      # Lógica da API
+      - API_AUTH_KEY=sua_chave_secreta_para_api # Chave de API para proteger o endpoint
+    depends_on:
+      - db
+      - queue
+      - minio
+    networks:
+      - maps_net
+
+  # 2. O Worker que processa a fila
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      # Conexões
+      - DB_DSN=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@queue:5672/
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_USER=${MINIO_ROOT_USER}
+      - MINIO_PASS=${MINIO_ROOT_PASSWORD}
+      - MINIO_USE_SSL=false
+      # Chaves de API
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+    depends_on:
+      - db
+      - queue
+      - minio
+    networks:
+      - maps_net
+
+  # 3. O Banco de Dados (PostgreSQL)
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=jobs_db
+    ports:
+      - "5432:5432" # Opcional: para você acessar o DB da sua máquina
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - maps_net
+
+  # 4. A Fila (RabbitMQ)
+  queue:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"   # Porta do AMQP
+      - "15672:15672" # Interface de Gerenciamento (Acesse em http://localhost:15672)
+    networks:
+      - maps_net
+
+  # 5. O Storage (MinIO - S3 local)
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # Porta da API S3
+      - "9001:9001" # Interface Web (Acesse em http://localhost:9001)
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    networks:
+      - maps_net
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  maps_net:
+    driver: bridge

@@ -1,0 +1,24 @@
+# Stage 1: Build
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copia todo o código-fonte
+COPY ./ ./
+
+# Compila o binário do Worker
+# Substitua './cmd/worker' pelo caminho real do seu 'main.go' do Worker
+RUN CGO_ENABLED=0 GOOS=linux go build -v -o /worker-service ./cmd/worker
+
+# Stage 2: Final Image
+FROM alpine:latest
+WORKDIR /
+# Copia certificados de CA
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copia apenas o binário compilado
+COPY --from=builder /worker-service /worker-service
+
+# O Worker não expõe portas, ele apenas se conecta externamente
+CMD ["/worker-service"]
