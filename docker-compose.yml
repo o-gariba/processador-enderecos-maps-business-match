@@ -13,15 +13,19 @@ services:
       - DB_DSN=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
       - RABBITMQ_URL=amqp://guest:guest@queue:5672/
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_USER=${MINIO_ROOT_USER}
-      - MINIO_PASS=${MINIO_ROOT_PASSWORD}
+      - MINIO_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - MINIO_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
       - MINIO_USE_SSL=false
+      - MINIO_PUBLIC_ENDPOINT=http://localhost:9000
       # Lógica da API
-      - API_AUTH_KEY=sua_chave_secreta_para_api # Chave de API para proteger o endpoint
+      - API_AUTH_KEY=00f4764113c3db26eaa72b392e06faeb # Chave de API para proteger o endpoint
     depends_on:
-      - db
-      - queue
-      - minio
+      db:
+        condition: service_healthy
+      queue:
+        condition: service_healthy
+      minio:
+        condition: service_started
     networks:
       - maps_net
 
@@ -35,15 +39,18 @@ services:
       - DB_DSN=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
       - RABBITMQ_URL=amqp://guest:guest@queue:5672/
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_USER=${MINIO_ROOT_USER}
-      - MINIO_PASS=${MINIO_ROOT_PASSWORD}
+      - MINIO_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - MINIO_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
       - MINIO_USE_SSL=false
       # Chaves de API
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
     depends_on:
-      - db
-      - queue
-      - minio
+      db:
+        condition: service_healthy
+      queue:
+        condition: service_healthy
+      minio:
+        condition: service_started
     networks:
       - maps_net
 
@@ -54,8 +61,14 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=jobs_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     ports:
-      - "5432:5432" # Opcional: para você acessar o DB da sua máquina
+      - "5433:5432" # Opcional: para você acessar o DB da sua máquina
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -65,6 +78,12 @@ services:
   # 4. A Fila (RabbitMQ)
   queue:
     image: rabbitmq:3-management-alpine
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
     ports:
       - "5672:5672"   # Porta do AMQP
       - "15672:15672" # Interface de Gerenciamento (Acesse em http://localhost:15672)
@@ -74,13 +93,21 @@ services:
   # 5. O Storage (MinIO - S3 local)
   minio:
     image: minio/minio
-    command: server /data --console-address ":9001"
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/minio server /data --console-address ':9001' &
+      until (/usr/bin/mc alias set minio http://localhost:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc mb minio/uploads --ignore-existing;
+      /usr/bin/mc mb minio/results --ignore-existing;
+      wait;
+      "
     ports:
       - "9000:9000" # Porta da API S3
       - "9001:9001" # Interface Web (Acesse em http://localhost:9001)
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_SERVER_URL=http://localhost:9000
     volumes:
       - minio_data:/data
     networks:

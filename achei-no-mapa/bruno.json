@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "achei-no-mapa",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

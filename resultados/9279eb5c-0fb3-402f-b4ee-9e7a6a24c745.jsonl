@@ -1,0 +1,14 @@
+{
+	"address":"AVENIDA DUQUE DE CAXIAS NORTE - 811 - PIRASSUNUNGA",
+	"details":
+		{
+			"result":
+				{
+					"name":"R. Duque de Caxias, 811",
+					"formatted_address":"R. Duque de Caxias, 811 - Centro, Pirassununga - SP, 13630-390, Brazil",
+					"international_phone_number":"",
+					"website":""
+				},
+			"status":"OK
+		}
+}

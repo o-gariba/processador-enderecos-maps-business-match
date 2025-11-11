@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
-	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -23,6 +23,7 @@ var (
 	minioClient *minio.Client
 	rabbitCh    *amqp.Channel
 	apiAuthKey  string
+	logger      *slog.Logger
 )
 
 type Job struct {
@@ -35,10 +36,9 @@ type Job struct {
 }
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("No .env file found")
-	}
+	var err error
+	// Initialize structured logger
+	logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// Config
 	dbDSN := os.Getenv("DB_DSN")
@@ -51,18 +51,21 @@ func main() {
 	// PostgreSQL
 	db, err = sqlx.Connect("postgres", dbDSN)
 	if err != nil {
+		logger.Error("Failed to connect to PostgreSQL", "error", err)
 		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
 
 	// RabbitMQ
 	conn, err := amqp.Dial(rabbitmqURL)
 	if err != nil {
+		logger.Error("Failed to connect to RabbitMQ", "error", err)
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}
 	defer conn.Close()
 
 	rabbitCh, err = conn.Channel()
 	if err != nil {
+		logger.Error("Failed to open a RabbitMQ channel", "error", err)
 		log.Fatalf("Failed to open a channel: %v", err)
 	}
 	defer rabbitCh.Close()
@@ -76,6 +79,7 @@ func main() {
 		nil,          // arguments
 	)
 	if err != nil {
+		logger.Error("Failed to declare a RabbitMQ queue", "error", err)
 		log.Fatalf("Failed to declare a queue: %v", err)
 	}
 
@@ -85,6 +89,7 @@ func main() {
 		Secure: false,
 	})
 	if err != nil {
+		logger.Error("Failed to connect to MinIO", "error", err)
 		log.Fatalf("Failed to connect to MinIO: %v", err)
 	}
 
@@ -100,6 +105,7 @@ func main() {
 		}
 	}
 
+	logger.Info("Starting API server on port 8080")
 	router.Run(":8080")
 }
 
@@ -130,6 +136,7 @@ func authMiddleware() gin.HandlerFunc {
 func handleUploadCSV(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
+		logger.Error("Failed to get file from form", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "File is required"})
 		return
 	}
@@ -149,6 +156,7 @@ func handleUploadCSV(c *gin.Context) {
 
 	src, err := file.Open()
 	if err != nil {
+		logger.Error("Failed to open uploaded file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file"})
 		return
 	}
@@ -156,12 +164,14 @@ func handleUploadCSV(c *gin.Context) {
 
 	_, err = minioClient.PutObject(c.Request.Context(), "uploads", objectName, src, file.Size, minio.PutObjectOptions{ContentType: "text/csv"})
 	if err != nil {
+		logger.Error("Failed to upload file to MinIO", "bucket", "uploads", "object", objectName, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload file"})
 		return
 	}
 
 	_, err = db.ExecContext(c.Request.Context(), "INSERT INTO jobs (id, status, created_at, updated_at) VALUES ($1, $2, $3, $4)", jobID, "PENDING", time.Now(), time.Now())
 	if err != nil {
+		logger.Error("Failed to create job in database", "job_id", jobID.String(), "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job"})
 		return
 	}
@@ -182,10 +192,12 @@ func handleUploadCSV(c *gin.Context) {
 			Body:        msgBody,
 		})
 	if err != nil {
+		logger.Error("Failed to publish job to RabbitMQ", "job_id", jobID.String(), "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to publish job"})
 		return
 	}
 
+	logger.Info("Successfully uploaded file and created job", "job_id", jobID.String())
 	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID, "status": "PENDING"})
 }
 
@@ -196,9 +208,11 @@ func handleGetJobStatus(c *gin.Context) {
 	err := db.GetContext(c.Request.Context(), &job, "SELECT * FROM jobs WHERE id = $1", jobID)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			logger.Warn("Job not found", "job_id", jobID)
 			c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 			return
 		}
+		logger.Error("Failed to get job status from database", "job_id", jobID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get job status"})
 		return
 	}
@@ -212,9 +226,11 @@ func handleGetJobStatus(c *gin.Context) {
 		if job.ResultPath.Valid {
 			presignedURL, err := minioClient.PresignedGetObject(c.Request.Context(), "results", job.ResultPath.String, time.Second*60*60, nil) // 1 hour expiry
 			if err != nil {
+				logger.Error("Failed to generate download URL", "job_id", jobID, "bucket", "results", "path", job.ResultPath.String, "error", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate download URL"})
 				return
 			}
+			
 			response["download_url"] = presignedURL.String()
 		}
 	} else if job.Status == "FAILED" {

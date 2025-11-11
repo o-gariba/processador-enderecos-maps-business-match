@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"os"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -19,10 +19,8 @@ import (
 )
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("No .env file found")
-	}
+	// Initialize structured logger
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// Config
 	dbDSN := os.Getenv("DB_DSN")
@@ -35,18 +33,21 @@ func main() {
 	// PostgreSQL
 	db, err := sqlx.Connect("postgres", dbDSN)
 	if err != nil {
+		logger.Error("Failed to connect to PostgreSQL", "error", err)
 		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
 
 	// RabbitMQ
 	conn, err := amqp.Dial(rabbitmqURL)
 	if err != nil {
+		logger.Error("Failed to connect to RabbitMQ", "error", err)
 		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}
 	defer conn.Close()
 
 	ch, err := conn.Channel()
 	if err != nil {
+		logger.Error("Failed to open a RabbitMQ channel", "error", err)
 		log.Fatalf("Failed to open a channel: %v", err)
 	}
 	defer ch.Close()
@@ -60,6 +61,7 @@ func main() {
 		nil,          // arguments
 	)
 	if err != nil {
+		logger.Error("Failed to declare a RabbitMQ queue", "error", err)
 		log.Fatalf("Failed to declare a queue: %v", err)
 	}
 
@@ -69,6 +71,7 @@ func main() {
 		Secure: false,
 	})
 	if err != nil {
+		logger.Error("Failed to connect to MinIO", "error", err)
 		log.Fatalf("Failed to connect to MinIO: %v", err)
 	}
 
@@ -77,7 +80,7 @@ func main() {
 	mapsClient := googlemaps.NewClient(googleMapsAPIKey, limiter)
 
 	// Job Processor
-	jobProcessor := processor.NewJobProcessor(db, minioClient, mapsClient)
+	jobProcessor := processor.NewJobProcessor(db, minioClient, mapsClient, logger)
 
 	// RabbitMQ Consumer
 	msgs, err := ch.Consume(
@@ -90,6 +93,7 @@ func main() {
 		nil,    // args
 	)
 	if err != nil {
+		logger.Error("Failed to register a RabbitMQ consumer", "error", err)
 		log.Fatalf("Failed to register a consumer: %v", err)
 	}
 
@@ -99,19 +103,20 @@ func main() {
 		for d := range msgs {
 			var jobData map[string]string
 			if err := json.Unmarshal(d.Body, &jobData); err != nil {
-				log.Printf("Error decoding job data: %s", err)
+				logger.Error("Error decoding job data", "error", err)
 				d.Nack(false, false) // To dead-letter queue
 				continue
 			}
 
 			jobID := jobData["job_id"]
 			csvPath := jobData["caminho_csv"]
+			logger.Info("Received a new job", "job_id", jobID, "csv_path", csvPath)
 
 			go jobProcessor.ProcessJob(context.Background(), jobID, csvPath)
 			d.Ack(false)
 		}
 	}()
 
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
+	logger.Info("Worker is waiting for messages. To exit press CTRL+C")
 	<-forever
 }

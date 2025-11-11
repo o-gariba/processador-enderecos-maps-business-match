@@ -1,0 +1,25 @@
+meta {
+  name: csv import
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://localhost:8080/api/v1/jobs/upload
+  body: multipartForm
+  auth: inherit
+}
+
+headers {
+  Authorization: Bearer 00f4764113c3db26eaa72b392e06faeb
+  Content-Type: multipart/form-data
+}
+
+body:multipart-form {
+  file: @file(/home/pedro-garibaldi-santos/Documents/cerveja-ribeirao/enderecos-somente-reduzido-teste.csv)
+}
+
+settings {
+  encodeUrl: false
+  timeout: 0
+}
